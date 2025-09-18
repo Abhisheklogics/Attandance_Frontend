@@ -1,0 +1,110 @@
+@import "tailwindcss";
+body{
+  background-color: #11011f;
+}
+.myapp {
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* 2 equal columns */
+  gap: 50px; /* space between video and form */
+  font-family: 'Poppins', sans-serif;
+  background: #11011f;
+  min-height: 100vh;
+  padding: 50px;
+  place-items: center; /* center content vertically and horizontally */
+}
+
+h1 {
+  grid-column: 1 / -1; /* span both columns */
+  text-align: center;
+  color: #f5eded;
+  margin-bottom: 70px;
+  font-size: 2.5rem;
+}
+
+/* VIDEO CONTAINER */
+.appvide {
+  position: relative;
+ 
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 15px 35px rgba(0,0,0,0.25);
+  transition: transform 0.3s;
+}
+
+.appvide:hover {
+  transform: scale(1.05); /* subtle zoom on hover */
+}
+
+video, canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 20px;
+}
+
+/* FORM STYLING */
+.student-form {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 400px;
+  background: white;
+  padding: 40px;
+  border-radius: 20px;
+  box-shadow: 0 15px 35px rgba(0,0,0,0.25);
+  transition: transform 0.3s;
+}
+
+.student-form:hover {
+  transform: translateY(-5px);
+}
+
+.student-form input {
+  margin-bottom: 20px;
+  padding: 15px;
+  border-radius: 12px;
+  border: 1px solid #ccc;
+  font-size: 16px;
+  transition: border 0.3s;
+}
+
+.student-form input:focus {
+  border-color: #4CAF50;
+  outline: none;
+}
+
+.student-form button {
+  padding: 15px;
+  background: #4CAF50;
+  color: white;
+  font-size: 18px;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: 0.3s;
+}
+
+.student-form button:hover {
+  background: #45a049;
+  transform: scale(1.05);
+}
+
+/* RESPONSIVE */
+@media (max-width: 900px) {
+  .myapp {
+    grid-template-columns: 1fr; /* stack vertically */
+    gap: 30px;
+    padding: 30px;
+  }
+
+  h1 {
+    font-size: 2rem;
+  }
+
+  .appvide, .student-form {
+    width: 100%;
+    max-width: 400px;
+  }
+}
