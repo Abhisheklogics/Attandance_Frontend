@@ -1,17 +1,29 @@
 import { useRef, useEffect, useState } from "react";
 import * as faceapi from "face-api.js";
 import toast, { Toaster } from "react-hot-toast";
+import { openDB } from "idb";
 import "./App.css";
 
 function App() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
-  const [student, setStudent] = useState({ name: "", roll: "", class: "" });
+  const [student, setStudent] = useState({ name: "", roll: "", class: "", parentNumber: "" });
   const [loading, setLoading] = useState(false);
   const [embeddingsArray, setEmbeddingsArray] = useState([]);
 
- 
+  // --- Initialize IndexedDB ---
+  async function initDB() {
+    return openDB("StudentDB", 1, {
+      upgrade(db) {
+        if (!db.objectStoreNames.contains("students")) {
+          db.createObjectStore("students", { keyPath: "roll" }); // Roll number as unique key
+        }
+      },
+    });
+  }
+
+  // --- Load face-api models ---
   useEffect(() => {
     const loadModels = async () => {
       try {
@@ -32,8 +44,8 @@ function App() {
     loadModels();
   }, []);
 
- 
-  function startVideo(){
+  // --- Start webcam ---
+  function startVideo() {
     navigator.mediaDevices
       .getUserMedia({ video: true })
       .then((stream) => {
@@ -43,9 +55,9 @@ function App() {
         toast.error("Camera error");
         console.error(err);
       });
-  };
+  }
 
-
+  // --- Draw detections ---
   useEffect(() => {
     const draw = async () => {
       if (videoRef.current && canvasRef.current) {
@@ -73,9 +85,7 @@ function App() {
     draw();
   }, []);
 
- 
-
-
+  // --- Capture and save photo ---
   const capturePhoto = async () => {
     if (loading) return;
     setLoading(true);
@@ -95,37 +105,27 @@ function App() {
 
       const embedding = Array.from(detection.descriptor);
 
-     
-      if (
-        embeddingsArray.some(
-          (e) => faceapi.euclideanDistance(e, embedding) < 0.35
-        )
-      ) {
+      // Prevent similar captures
+      if (embeddingsArray.some((e) => faceapi.euclideanDistance(e, embedding) < 0.35)) {
         toast("Please move slightly for a different angle.", { icon: "↔️" });
         return;
       }
 
       const updatedEmbeddings = [...embeddingsArray, embedding];
       setEmbeddingsArray(updatedEmbeddings);
-      toast.success(`Photo captured! (${updatedEmbeddings.length}/3)`);
+      toast.success(`Photo captured! (${updatedEmbeddings.length}/2)`);
 
-    if (embeddingsArray.length + 1 === 3) {
-        
-        const payload = { ...student, embeddings: [...embeddingsArray, embedding] };
-        const res = await fetch("/api/register-student", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const data = await res.json();
-        alert(data.message || " Student registered successfully!");
+      
+      if (updatedEmbeddings.length === 2) {
+        const db = await initDB();
+        await db.put("students", { ...student, embeddings: updatedEmbeddings });
+        toast.success("Student saved to IndexedDB!");
         setEmbeddingsArray([]);
-          setStudent('');
-        
+        setStudent({ name: "", roll: "", class: "", parentNumber: "" });
       }
     } catch (err) {
       console.error(err);
-      toast.error(" Error capturing photo.");
+      toast.error("Error capturing photo.");
     } finally {
       setLoading(false);
     }
@@ -175,10 +175,17 @@ function App() {
           onChange={(e) => setStudent({ ...student, class: e.target.value })}
           required
         />
+        <input
+          type="text"
+          placeholder="Parent Number"
+          value={student.parentNumber}
+          onChange={(e) => setStudent({ ...student, parentNumber: e.target.value })}
+          required
+        />
         <button type="button" onClick={capturePhoto} disabled={loading}>
           {loading
             ? "Capturing..."
-            : `Capture Photo (${embeddingsArray.length}/3)`}
+            : `Capture Photo (${embeddingsArray.length}/2)`}
         </button>
       </form>
     </div>

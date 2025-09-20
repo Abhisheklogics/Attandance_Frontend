@@ -1,13 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import * as faceapi from "face-api.js";
+import { openDB } from "idb";
 
 function Attendance() {
   const videoRef = useRef();
   const canvasRef = useRef();
   const [students, setStudents] = useState([]);
   const [faceMatcher, setFaceMatcher] = useState(null);
-  const [currentStudent, setCurrentStudent] = useState(null);
+  const [detectedStudents, setDetectedStudents] = useState([]);
+  const [attendanceLog, setAttendanceLog] = useState({}); // Roll -> marked
 
+  // 📂 Initialize Attendance DB
+  async function initAttendanceDB() {
+  return await openDB("AttendanceDB", 2, {
+  upgrade(db) {
+    if (!db.objectStoreNames.contains("attendance")) {
+      const store = db.createObjectStore("attendance", {
+        keyPath: "id",
+        autoIncrement: true, // ✅ ensures multiple entries
+      });
+      store.createIndex("roll", "roll", { unique: false });
+      store.createIndex("timestamp", "timestamp", { unique: false });
+    }
+  },
+});
+
+}
+
+  // 📂 Load face-api models and student embeddings from StudentDB
   useEffect(() => {
     const loadModelsAndData = async () => {
       await Promise.all([
@@ -17,22 +37,21 @@ function Attendance() {
       ]);
       startVideo();
 
-      const res = await fetch("/api/students");
-      const data = await res.json();
-      setStudents(data);
+      const db = await openDB("StudentDB", 1);
+      const allStudents = await db.getAll("students");
+      setStudents(allStudents);
 
-      const labeledDescriptors = data.map((stu) => {
+      const labeledDescriptors = allStudents.map((stu) => {
         const descriptors = stu.embeddings.map((emb) => new Float32Array(emb));
-        return new faceapi.LabeledFaceDescriptors(stu.name, descriptors);
+        return new faceapi.LabeledFaceDescriptors(stu.roll, descriptors);
       });
-
-      const matcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
-      setFaceMatcher(matcher);
+      setFaceMatcher(new faceapi.FaceMatcher(labeledDescriptors, 0.6));
     };
 
     loadModelsAndData();
   }, []);
 
+  // 🎥 Start webcam
   const startVideo = () => {
     navigator.mediaDevices
       .getUserMedia({ video: true })
@@ -40,9 +59,10 @@ function Attendance() {
       .catch((err) => console.error("Camera error:", err));
   };
 
+  // 📸 Detect faces continuously
   const handleVideoPlay = () => {
-    const canvas = canvasRef.current;
     const video = videoRef.current;
+    const canvas = canvasRef.current;
     const displaySize = { width: video.videoWidth, height: video.videoHeight };
     faceapi.matchDimensions(canvas, displaySize);
 
@@ -50,22 +70,24 @@ function Attendance() {
       if (!faceMatcher) return;
 
       const detections = await faceapi
-        .detectAllFaces(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+        .detectAllFaces(
+          video,
+          new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })
+        )
         .withFaceLandmarks()
         .withFaceDescriptors();
 
-      const resizedDetections = faceapi.resizeResults(detections, displaySize);
-
+      const resized = faceapi.resizeResults(detections, displaySize);
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      if (resizedDetections.length > 0) {
-        const detection = resizedDetections[0]; 
-        const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
-        const studentObj = students.find((s) => s.name === bestMatch.label);
+      const detectedList = [];
 
-        const displayText = studentObj
-          ? `${bestMatch.label} - Class: ${studentObj.class}`
+      resized.forEach((detection) => {
+        const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
+        const studentObj = students.find((s) => s.roll === bestMatch.label);
+        const label = studentObj
+          ? `${studentObj.name} (Roll: ${studentObj.roll})`
           : "Unknown";
 
         const box = detection.detection.box;
@@ -73,43 +95,49 @@ function Attendance() {
         ctx.lineWidth = 3;
         ctx.strokeRect(box.x, box.y, box.width, box.height);
 
-        ctx.fillStyle = studentObj ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)";
-        const textWidth = ctx.measureText(displayText).width;
+        ctx.fillStyle = studentObj ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)";
+        const textWidth = ctx.measureText(label).width;
         ctx.fillRect(box.x, box.y - 24, textWidth + 10, 24);
 
         ctx.fillStyle = "#fff";
         ctx.font = "18px Arial";
-        ctx.fillText(displayText, box.x + 5, box.y - 5);
+        ctx.fillText(label, box.x + 5, box.y - 5);
 
-       
-        setCurrentStudent(studentObj || null);
-      } else {
-        setCurrentStudent(null);
-      }
-    }, 200);
+        if (studentObj) detectedList.push(studentObj);
+      });
+
+      setDetectedStudents(detectedList);
+    }, 300);
 
     return () => clearInterval(interval);
   };
 
-  const markAttendance = async () => {
-    if (!currentStudent) return;
+  // 📝 Mark attendance and store in IndexedDB
+  const markAttendance = async (stu) => {
+    if (!stu) return;
 
-    try {
-      const res = await fetch("/api/mark", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: currentStudent.name,
-          roll: currentStudent.roll,
-          className: currentStudent.class,
-        }),
-      });
-      const data = await res.json();
-      alert(data.message || "Attendance marked!");
-    } catch (err) {
-      console.error(err);
-      alert("Failed to mark attendance.");
+    const db = await initAttendanceDB();
+    const today = new Date().toDateString();
+
+    // Check if already marked today
+    const allRecords = await db.getAll("attendance");
+    const alreadyMarked = allRecords.some(
+      (rec) => rec.roll === stu.roll && new Date(rec.timestamp).toDateString() === today
+    );
+
+    if (!alreadyMarked) {
+     await db.add("attendance", {
+  roll: stu.roll,
+  name: stu.name,
+  class: stu.class,
+  present: true,
+  timestamp: new Date().toISOString(),
+});
+
+      console.log(`Attendance stored for ${stu.name}`);
     }
+
+    setAttendanceLog((prev) => ({ ...prev, [stu.roll]: true }));
   };
 
   return (
@@ -130,15 +158,34 @@ function Attendance() {
         <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full" />
       </div>
 
-      <button
-        onClick={markAttendance}
-        disabled={!currentStudent}
-        className={`mt-6 px-6 py-3 font-bold rounded-lg shadow-lg text-white ${
-          currentStudent ? "bg-green-500 hover:bg-green-600" : "bg-gray-400 cursor-not-allowed"
-        }`}
-      >
-        {currentStudent ? `Mark Attendance for ${currentStudent.name}` : "No student detected"}
-      </button>
+      <div className="mt-6 w-full max-w-2xl bg-white rounded-lg shadow p-4">
+        <h2 className="text-xl font-bold mb-2">Detected Students</h2>
+        {detectedStudents.length > 0 ? (
+          detectedStudents.map((stu) => (
+            <div
+              key={stu.roll}
+              className="flex items-center justify-between border-b py-2"
+            >
+              <span>
+                {stu.name} (Roll: {stu.roll}, Class: {stu.class})
+              </span>
+              <button
+                onClick={() => markAttendance(stu)}
+                disabled={attendanceLog[stu.roll]}
+                className={`px-3 py-1 text-white rounded ${
+                  attendanceLog[stu.roll]
+                    ? "bg-gray-400 cursor-not-allowed"
+                    : "bg-green-500 hover:bg-green-600"
+                }`}
+              >
+                {attendanceLog[stu.roll] ? "Marked" : "Mark Attendance"}
+              </button>
+            </div>
+          ))
+        ) : (
+          <p className="text-gray-600">No faces detected</p>
+        )}
+      </div>
     </div>
   );
 }
